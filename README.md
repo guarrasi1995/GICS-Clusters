@@ -1,0 +1,2 @@
+# GICS-Clusters
+Select a sensible portfolio of stocks, build the data matrix and visualize what’s going on in there. With this data, choose two different association measures, implement the bootstrap procedure described at page 3 and 4 of our notes to build marginal correlation graphs, and compare the results. In particular, visualize the graphs using the gics sectors to annotate/color the nodes, and draw some conclusion: is there any statistical evidence to support the claim that stocks from the same sector cluster together?
