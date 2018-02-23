@@ -1,0 +1,495 @@
+---
+title: "Homework 3"
+author: "Valerio Guarrasi & Davide Aureli"
+date: "30 dicembre 2017"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r echo=FALSE, out.width='100%'}
+knitr::include_graphics('C:/Users/Valerio/Desktop/Statistical Methods in Data Science & Laboratory I/SDS HW/SDS HW3/immagine.png')
+```
+
+```{r, message=FALSE, warning=FALSE}
+# Load the packages
+require(foreach, quietly = TRUE)
+require(doParallel, quietly = TRUE)
+require(snow, quietly = TRUE)
+require(tseries, quietly = TRUE)
+require(igraph, quietly = TRUE)
+```
+
+```{r, message=FALSE, warning=FALSE}
+# Get Apple Inc. from NYSE as a point of reference
+aapl <- suppressWarnings( get.hist.quote(instrument="AAPL", start="2003-01-01", end="2008-01-01", quote= c("Open","Close"), provider="yahoo", drop=TRUE, quiet = TRUE) )
+```
+
+###Data
+
+We decided to select only 10 firms for each GICS having a total 100 stocks. We had to select firms that were active in the entire period "2003-01-01" - "2008-01-01", otherwise we would have missing values.
+
+```{r}
+
+Basic_Materials <- c("XOM","RDS-B","CVX","PTR","TOT","BP","BHP","VALE","SNP","SLB")
+
+Consumer_Goods <- c("AAPL","PG","MO","KO","TM","PEP","NKE","UN","BTI","UL")
+
+Health_Care <- c("JNJ","PFE","UNH","NVS","BMY","MRK","NVO","AMGN","MDT","SNY")
+
+Services <- c("AMZN","PCLN","WMT","HD","CMCSA","DIS","MCD","UNP","UPS","NFLX")
+
+Utilities <- c("NEE","DUK","D","SO","OKE","EXC","AEP","SRE","ED","PEG")
+
+Finance = c("BRK-A","JPM","BAC","WFC","HSBC","HSBC","C","MS","GS","RY")
+
+IndrustialGoods = c("BA","GE","MMM","HON","UTX","ARNC","LMT","DHR","GD","ABB")
+
+Information_Technology <-c("ADS","AAPL","CTSH","GLW","MCHP","NTAP","DCM","TXN","TSS","VRSN")
+
+Energy<-c("CHK","CVX","FTI","HAL","NOV","NFX","NBL","OKE","PXD","SWN")
+
+Staples<-c("ADM","CL","COST","KR","MDLZ","PG","SYY","TSN","WMT","WBA")
+
+GICS <- c("Basic_Materials","Consumer_Goods","Health_Care","Services","Utilities","Finance","IndrustialGoods","Information_Technology","Energy","Staples")
+```
+
+###Create X_hat
+
+We put them all toghether to work on them. We created a matrix, called X, with number of coloumns equal to the total stocks (100 in our case) and the number of rows represent the percentage variation of the stock during the period that we want to analyze: from 01/02/2013 to 31/12/2017. In fact the value in each row , for a specific coloumn, describes the variation between the period t-1 and the period t. 
+
+To evaluate the performance of a stock we used a relative price defined by Bordin, which follows this formula: $x_{t,j}= \frac{c_{t,j}}{c_{t-1,j}}$. But we used a log scale of this so: $x_{t,j}= log(\frac{c_{t,j}}{c_{t-1,j}})$. Where the closing price $c_{j,t}$ of each stock. 
+
+To pull financial data into R we obtained this from the Yahoo! Finance portal.
+
+```{r}
+STOCK = c("XOM","RDS-B","CVX","PTR","TOT","BP","BHP","VALE","SNP","SLB","AAPL","PG","MO","KO","TM","PEP","NKE","UN","BTI","UL","JNJ","PFE","UNH","NVS","BMY","MRK","NVO","AMGN","MDT","SNY","AMZN","PCLN","WMT","HD","CMCSA","DIS","MCD","UNP","UPS","NFLX","NEE","DUK","D","SO","OKE","EXC","AEP","SRE","ED","PEG","BRK-A","JPM","BAC","WFC","HSBC","HSBC","C","MS","GS","RY","BA","GE","MMM","HON","UTX","ARNC","LMT","DHR","GD","ABB","ADS","AAPL","CTSH","GLW","MCHP","NTAP","DCM","TXN","TSS","VRSN","CHK","CVX","FTI","HAL","NOV","NFX","NBL","OKE","PXD","SWN","ADM","CL","COST","KR","MDLZ","PG","SYY","TSN","WMT","WBA")
+
+X <- matrix(NA,nrow= length(aapl$Close)-1,ncol = length(STOCK))
+
+create_X <- function(STOCKS,X){
+  for(j in 1:length(STOCKS)){
+  stock <- suppressWarnings(
+  get.hist.quote(instrument=STOCKS[j], start="2003-01-01", end="2008-01-01",
+  quote= c("Open","Close"), provider="yahoo", drop=TRUE, quiet = TRUE)
+  )
+  
+  for (t in 1 : length(stock$Close)-1){
+    s <- log((as.double(stock$Close[t+1]))/(as.double(stock$Close[t])))
+    
+    X[t,j] <- as.numeric(s)
+   
+  }
+  }
+  return (X)
+}
+
+X = create_X(STOCK,X)
+```
+
+
+
+###Create R_hat
+
+After that, we created the matrix R_Hat_P , which descibes the correlation between stocks by Pearson's Correlation. Otherwise, to fill the second matrix R_Hat_K we used Spearman's Correlation. We decided to not use Kendall's correlation because the computational time was to high.
+
+Correlation is a bivariate analysis that measures the strength of association between two variables and the direction of the relationship.  In terms of the strength of relationship, the value of the correlation coefficient varies between +1 and -1.  A value of ± 1 indicates a perfect degree of association between the two variables.  As the correlation coefficient value goes towards 0, the relationship between the two variables will be weaker.  The direction of the relationship is indicated by the sign of the coefficient; a + sign indicates a positive relationship and a - sign indicates a negative relationship. 
+
+Pearson r correlation: Pearson r correlation is the most widely used correlation statistic to measure the degree of the relationship between linearly related variables.  For example, in the stock market, if we want to measure how two stocks are related to each other, Pearson r correlation is used to measure the degree of relationship between the two. It follows the formula: 
+$ r = \frac{N\sum{XY}-(\sum{X}\sum{Y})}{\sqrt{ [N \sum{x^2}-(\sum{x})^2 ][N \sum{y^2}-(\sum{y})^2 }]}$
+
+Kendall rank correlation: Kendall rank correlation is a non-parametric test that measures the strength of dependence between two variables.  If we consider two samples, a and b, where each sample size is n, we know that the total number of pairings with a b is n(n-1)/2. Pearson's is very susceptible to the effects of outliers, particularly in small samples. It follows the formula: $\tau =\frac{n_c-n_d}{\frac{1}{2}n(n-1)}$
+
+Spearman rank correlation: Spearman rank correlation is a non-parametric test that is used to measure the degree of association between two variables.  The Spearman rank correlation test does not carry any assumptions about the distribution of the data and is the appropriate correlation analysis when the variables are measured on a scale that is at least ordinal. It follows the formula: $\rho =1-\frac{6\sum d_i^2}{n(n^2-1)}$
+
+```{r}
+#Pearson
+R_hat_P = matrix(NA,nrow= length(STOCK),ncol = length(STOCK))
+
+create_R_hat_P= function(STOCK,X,R_hat_P){
+  for (i in 1 : length(STOCK)){
+  col1 <- X[,i]
+  for (j in 1:length(STOCK)){
+    col2 <- X[,j]
+    R_hat_P[i,j]=cor(col1,col2)
+  }
+}
+return(R_hat_P)
+}
+
+R_hat_P=create_R_hat_P(STOCK,X,R_hat_P)
+
+# Spearman
+R_hat_K = matrix(NA,nrow= length(STOCK),ncol = length(STOCK))
+
+create_R_hat_K= function(STOCK,X,R_hat_K){
+  for (i in 1 : length(STOCK)){
+  col1 <- X[,i]
+  for (j in 1:length(STOCK)){
+    col2 <- X[,j]
+    R_hat_K[i,j]=cor(col1,col2,method = "spearman")
+  }
+}
+return(R_hat_K)
+}
+
+R_hat_K=create_R_hat_K(STOCK,X,R_hat_K)
+```
+
+###Create Z_hat
+
+We can transform our matrices by using the Z-transform (Fisher): $\hat{Z}_{j,k}=h(\hat{p}_{j,k})=\frac{1}{2}log(\frac{1+\hat{p}_{j,k}}{1-\hat{p}_{j,k}})$
+
+```{r}
+#Pearson and Spearman
+Z_Hat_P = matrix(NA,nrow = length(STOCK) ,ncol =length(STOCK) )
+Z_Hat_K = matrix(NA,nrow = length(STOCK) ,ncol =length(STOCK) )
+
+create_Z_Hat = function(Z_Hat,R_hat_P,STOCK){
+  for (i in 1 : length(STOCK)){
+  for (j in 1: length(STOCK)){
+    Z_Hat[i,j]= 0.5*(log((1+R_hat_P[i,j])/(1-R_hat_P[i,j])))
+    
+  }
+  }
+  return (Z_Hat)
+}
+
+Z_Hat_P = create_Z_Hat(Z_Hat_P,R_hat_P,STOCK)
+Z_Hat_K = create_Z_Hat(Z_Hat_K,R_hat_K,STOCK)
+```
+
+###Non Paramteric Bootstrap
+
+To avaluate the standard error, we used Non Parametric Bootstrap by resampling the X matrix by randomly choosing rows from our original X matrix, creating X_star. With the same tecniques from above, we created R_star and Z_star. Then we created a delta vector containg for each boostrap its bootstrapped replicate like this: $\Delta_b=\sqrt{n}*max|\hat{R}_b^*-\hat{R}|$.
+
+Here we used Parallelism between every cycle since they are independent. We used the number of total cores -1.
+
+```{r}
+no_cores <- detectCores() - 1
+cl <- makeCluster(no_cores)  
+registerDoParallel(cl)
+
+#Pearson
+B = 100
+delta_P = NULL
+delta_P <- foreach(b = 1 : B, .combine=c) %dopar% {
+  X_star_P <- matrix(NA,nrow= 1257,ncol = length(STOCK))
+  idx = sample(1:length(X[,1]),replace= TRUE)
+  R_star_P =  matrix(NA,nrow = length(STOCK) ,ncol =length(STOCK) )
+  Z_star_P = matrix(NA,nrow = length(STOCK) ,ncol =length(STOCK) )
+  for (i in 1:length(X[,1])){
+  X_star_P[i,] = X[idx[i],]
+  }
+  R_star_P=create_R_hat_P(STOCK,X_star_P,R_star_P)
+  Z_star_P=create_Z_Hat(Z_star_P,R_star_P,STOCK)
+  
+  sqrt(length(STOCK))*max(abs(R_star_P - R_hat_P))
+}
+
+#Spearman
+B = 100
+delta_K = NULL
+delta_K <- foreach(b = 1 : B, .combine=c) %dopar% {
+  X_star_K <- matrix(NA,nrow= 1257,ncol = length(STOCK))
+  idx = sample(1:length(X[,1]),replace= TRUE)
+  R_star_K =  matrix(NA,nrow = length(STOCK) ,ncol =length(STOCK) )
+  Z_star_K = matrix(NA,nrow = length(STOCK) ,ncol =length(STOCK) )
+  for (i in 1:length(X[,1])){
+  X_star_K[i,] = X[idx[i],]
+  }
+  R_star_K=create_R_hat_K(STOCK,X_star_K,R_star_K)
+  Z_star_K=create_Z_Hat(Z_star_K,R_star_K,STOCK)
+  
+  sqrt(length(STOCK))*max(abs(R_star_K - R_hat_K))
+}
+
+stopCluster(cl)
+```
+
+Then we found its relative ECDF with: $\hat{F}_n(t)=\frac{1}{B}\displaystyle\sum_{b=1}^{B} I(\Delta_b\leq t)$
+```{r}
+F_hat_P = ecdf(delta_P)
+F_hat_K = ecdf(delta_K)
+par(mfrow=c(1,2))
+plot(F_hat_P,main = "ECDF delta - Pearson")
+plot(F_hat_K,main = "ECDF delta - Spearman")
+```
+
+###Analysis on alpha and espilon
+We build and use confidence intervals to draw a marginal correlation graph, we are essentially exploiting their link with statistical tests: H0: there's no {i,j} edge,  VS  H1: there is an {i,j} edge (for all undirected i - j pairs). Taking epsilon = 0 it just means that we place an {i,j} edge if the (1 - alpha){i,j} confidence interval does not contain 0. The large sample size will provide a very high power to your test, making H1 distinguishable from H0 at very small scales. 
+We want to study what happens to the graph when we change alpha (the statistical factor) and epsilon (the interestingness factor). We analized with 3d plots how the number of edges, the number of connected nodes and the number of isolated nodes change according to different values of alpha and epsilon. We applied this both for Pearson correlation and Spearman correlation.
+```{r}
+#possible values for epsilon and alpha
+vector_eps<-c(0,0.01,0.05,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8)
+vector_alpha<-c(0.00001,0.0001,0.001,0.01,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9)
+alpha_final_P <- NULL
+eps_final_P <- NULL
+numberofedges_final_P <- NULL
+numberofconnected_P<-NULL
+numberofisolated_P<-NULL
+alpha_final_K <- NULL
+eps_final_K <- NULL
+numberofedges_final_K <- NULL
+numberofconnected_K<-NULL
+numberofisolated_K<-NULL
+matrix_numberofedges_P =  matrix(NA,nrow = length(vector_alpha) ,ncol =length(vector_eps) )
+matrix_numberofedges_K =  matrix(NA,nrow = length(vector_alpha) ,ncol =length(vector_eps) )
+#for all the values of alpha create the relative cofindence intervals
+for (a in 1:length(vector_alpha)){
+  alpha=vector_alpha[a]
+  #Pearson
+t_al_P = quantile(F_hat_P,1-alpha) 
+
+Sim_Conf_Set.low_P = R_hat_P - (t_al_P/(sqrt(length(STOCK))))
+
+Sim_Conf_Set.upp_P = R_hat_P + (t_al_P/(sqrt(length(STOCK))))
+#Spearman
+t_al_K = quantile(F_hat_K,1-alpha)
+
+Sim_Conf_Set.low_K = R_hat_P - (t_al_K/(sqrt(length(STOCK))))
+
+Sim_Conf_Set.upp_K = R_hat_P + (t_al_K/(sqrt(length(STOCK))))
+
+#for all the values of epsilon create the relative adjency matrix
+for (e in 1:length(vector_eps)){
+  eps<-vector_eps[e]
+  #Pearson
+  Edges_P_B <- matrix(NA, nrow = length(STOCK), ncol = length(STOCK))
+for (i in 1:length(STOCK)){
+  for (j in 1:length(STOCK)){
+    if ( ((Sim_Conf_Set.low_P[i,j]>=-eps) & (Sim_Conf_Set.low_P[i,j]<=eps)) | ((Sim_Conf_Set.upp_P[i,j]>=-eps) & (Sim_Conf_Set.upp_P[i,j]<=eps)) | ((Sim_Conf_Set.low_P[i,j]<=-eps) & (Sim_Conf_Set.upp_P[i,j]>=eps))){
+      Edges_P_B[i,j] <- 0
+    }
+    else{
+       Edges_P_B[i,j] <- 1
+    }
+  }
+}
+#find the number of edges (not considering the diagonal)
+matrix_numberofedges_P[a,e]<-(sum(Edges_P_B)-100)/2
+alpha_final_P<-c(alpha_final_P,vector_alpha[a])
+eps_final_P<-c(eps_final_P,vector_eps[e])
+numberofedges_final_P<-c(numberofedges_final_P,matrix_numberofedges_P[a,e])
+#find the number of connected nodes 
+numberofconnected_P<-c(numberofconnected_P,length(which(colSums(Edges_P_B)!=1)))
+#find the number of isolated nodes
+numberofisolated_P<-c(numberofisolated_P,length(which(colSums(Edges_P_B)==1)))
+#Spearman
+Edges_K_B <- matrix(NA, nrow = length(STOCK), ncol = length(STOCK))
+for (i in 1:length(STOCK)){
+  for (j in 1:length(STOCK)){
+    if ( ((Sim_Conf_Set.low_K[i,j]>=-eps) & (Sim_Conf_Set.low_K[i,j]<=eps)) | ((Sim_Conf_Set.upp_K[i,j]>=-eps) & (Sim_Conf_Set.upp_K[i,j]<=eps)) | ((Sim_Conf_Set.low_K[i,j]<=-eps) & (Sim_Conf_Set.upp_K[i,j]>=eps))){
+      Edges_K_B[i,j] <- 0
+    }
+    else{
+       Edges_K_B[i,j] <- 1
+    }
+  }
+}
+#find the number of edges (not considering the diagonal)
+matrix_numberofedges_K[a,e]<-(sum(Edges_K_B)-100)/2
+alpha_final_K<-c(alpha_final_K,vector_alpha[a])
+eps_final_K<-c(eps_final_K,vector_eps[e])
+numberofedges_final_K<-c(numberofedges_final_K,matrix_numberofedges_K[a,e])
+#find the number of connected nodes
+numberofconnected_K<-c(numberofconnected_K,length(which(colSums(Edges_K_B)!=1)))
+#find the number of isolated nodes
+numberofisolated_K<-c(numberofisolated_K,length(which(colSums(Edges_K_B)==1)))
+}
+}
+
+```
+
+```{r}
+library(scatterplot3d)
+par(mfrow=c(1,2))
+scatterplot3d(x = alpha_final_P,y=eps_final_P,z=numberofedges_final_P, type="p",highlight.3d=TRUE, angle=-60,main="Number of Edges - Pearson",  xlab="alpha",ylab="espilon",zlab="Number of Edges",col.axis="blue",pch=20)
+scatterplot3d(x = alpha_final_K,y=eps_final_K,z=numberofedges_final_K, type="p",highlight.3d=TRUE, angle=-60,main="Number of Edges - Spearman", xlab="alpha",ylab="espilon",zlab="Number of Edges",col.axis="blue",pch=20)
+```
+
+Here we can see that, both for Pearson and Spearman, that as alpha gets bigger, the number of edges gets bigger, but not as much as when we decrease epsilon. So for a big alpha and a small epsilon we have too many edges, and instead for a small alpha and a big epsilon we have zero edges.
+
+```{r}
+par(mfrow=c(1,2))
+scatterplot3d(x = alpha_final_P,y=eps_final_P,z=numberofconnected_P, type="p",highlight.3d=TRUE, angle=-60,main="Number of Connected Nodes - Pearson",  xlab="alpha",ylab="espilon",zlab="Number of connected Nodes",col.axis="blue",pch=20)
+scatterplot3d(x = alpha_final_P,y=eps_final_P,z=numberofconnected_K, type="p",highlight.3d=TRUE, angle=-60,main="Number of Connected Nodes - Spearman",  xlab="alpha",ylab="espilon",zlab="Number of connected Nodes",col.axis="blue",pch=20)
+```
+
+Here we can see that, both for Pearson and Spearman, that as alpha gets bigger, the number of connected nodes gets bigger, but not as much as when we decrease epsilon. So for a big alpha and a small epsilon we have too many connected nodes, and instead for a small alpha and a big epsilon we have zero connected nodes.
+
+```{r}
+par(mfrow=c(1,2))
+scatterplot3d(x = alpha_final_P,y=eps_final_P,z=numberofisolated_P, type="p",highlight.3d=TRUE, angle=-70,main="Number of Isolated Nodes - Pearson",  xlab="alpha",ylab="espilon",zlab="Number of Isolated Nodes",col.axis="blue",pch=20)
+scatterplot3d(x = alpha_final_P,y=eps_final_P,z=numberofisolated_K, type="p",highlight.3d=TRUE, angle=-70,main="Number of Isolated Nodes - Spearman",  xlab="alpha",ylab="espilon",zlab="Number of Isolated Nodes",col.axis="blue",pch=20)
+```
+
+Here we can see that, both for Pearson and Spearman, that as alpha gets bigger, the number of isolated nodes gets smaller, but not as much as when we decrease epsilon. So for a big alpha and a small epsilon we have zero isolated nodes, and instead for a small alpha and a big epsilon we have too many isolated nodes. We can see, of course, that the graphs of isolated and connected nodes are simmetrical.
+
+We created a interactive app to show how the plot changes with different values of alpha and epsilon. To make it work, follow these steps:
+
+1. Run the Aureli-Guarrasi.Rmd file or use the workspace that we sent with RStudio.
+
+2. Run the ui.R file.
+
+3. Write in Console : runApp() , or press the button RunApp on the top-right part of the screen.
+
+A html page should open. Have fun! 
+
+So after these analysis we chose our alpha and epsilon.
+Finally we created the relative confidence intervals at level alpha = 0.00001 with: $C_{j,k}(\alpha)=\bigg[\hat{R}[j,k]-\frac{t_{\alpha}}{\sqrt{n}},\hat{R}[j,k]+\frac{t_{\alpha}}{\sqrt{n}}\bigg]$
+```{r}
+alpha = 0.00001
+#Pearson
+t_al_P = quantile(F_hat_P,1-alpha) 
+
+Sim_Conf_Set.low_P = R_hat_P - (t_al_P/(sqrt(length(STOCK))))
+
+Sim_Conf_Set.upp_P = R_hat_P + (t_al_P/(sqrt(length(STOCK))))
+#Spearman
+t_al_K = quantile(F_hat_K,1-alpha)
+
+Sim_Conf_Set.low_K = R_hat_P - (t_al_K/(sqrt(length(STOCK))))
+
+Sim_Conf_Set.upp_K = R_hat_P + (t_al_K/(sqrt(length(STOCK))))
+```
+
+We fill the empty matrices Edges_P and Edges_K by checking if the intesection between [-eps,eps] and the confidence interval is NULL. If it is empty we create the edge, adjurning the Adjacency Matrix. We chose eps = 0.3 since eps=0 created too many edges.
+
+```{r}
+#Pearson
+eps = 0.3
+Edges_P_B <- matrix(NA, nrow = length(STOCK), ncol = length(STOCK))
+for (i in 1:length(STOCK)){
+  for (j in 1:length(STOCK)){
+    if ( ((Sim_Conf_Set.low_P[i,j]>=-eps) & (Sim_Conf_Set.low_P[i,j]<=eps)) | ((Sim_Conf_Set.upp_P[i,j]>=-eps) & (Sim_Conf_Set.upp_P[i,j]<=eps)) | ((Sim_Conf_Set.low_P[i,j]<=-eps) & (Sim_Conf_Set.upp_P[i,j]>=eps))){
+      Edges_P_B[i,j] <- 0
+    }
+    else{
+       Edges_P_B[i,j] <- 1
+    }
+  }
+}
+
+#Spearman
+eps = 0.3
+Edges_K_B <- matrix(NA, nrow = length(STOCK), ncol = length(STOCK))
+for (i in 1:length(STOCK)){
+  for (j in 1:length(STOCK)){
+    if ( ((Sim_Conf_Set.low_K[i,j]>=-eps) & (Sim_Conf_Set.low_K[i,j]<=eps)) | ((Sim_Conf_Set.upp_K[i,j]>=-eps) & (Sim_Conf_Set.upp_K[i,j]<=eps)) | ((Sim_Conf_Set.low_K[i,j]<=-eps) & (Sim_Conf_Set.upp_K[i,j]>=eps))){
+      Edges_K_B[i,j] <- 0
+    }
+    else{
+       Edges_K_B[i,j] <- 1
+    }
+  }
+}
+```
+
+Having the Adjacency Matrices, we can plot the graphs. The nodes reppresent the stocks. We assigned for every GICS a different color so we can study it better.
+
+```{r}
+#Pearson
+net_P_B=graph.adjacency(Edges_P_B,mode="undirected",weighted=NULL,diag=FALSE)
+colors <- c("green","red","orchid","blue","yellow","orange","black","grey","brown","purple")
+for ( i in 10:1){
+V(net_P_B)[ V(net_P_B) <= i*10 ]$color <- colors[i]
+}
+plot.igraph(net_P_B,vertex.label=NA,vertex.size=5,layout=layout.fruchterman.reingold,
+            main= "Marginal Correlation Graph - Pearson - Bootstrap")
+legend(x = "topleft", GICS ,col = colors, bty="n", cex=0.7, lty=1)
+```
+
+```{r}
+#Spearman
+net_K_B=graph.adjacency(Edges_K_B,mode="undirected",weighted=NULL,diag=FALSE)
+colors <- c("green","red","orchid","blue","yellow","orange","black","grey","brown","purple")
+for ( i in 10:1){
+V(net_K_B)[ V(net_K_B) <= i*10 ]$color <- colors[i]
+}
+plot.igraph(net_K_B,vertex.label=NA,vertex.size=5,layout=layout.fruchterman.reingold,
+            main= "Marginal Correlation Graph - Spearman - Bootstrap")
+legend(x = "topleft", GICS ,col = colors, bty="n", cex=0.7, lty=1)
+```
+
+###Analysis
+
+We can see that both association measures create a few clusters and some isolated nodes. The isolate nodes, represent firms that follow their own change of closing price. Basic Materials, Utilities, Energy and Finance clusters are created in both methods. So we can conclude that most of the firms that are in these areas follow the same trend. We can see in particular that Basic Materials and Energy are really similar to each other. In a weaker way, we can see even the cluster for Industrial Goods but only with the Spearman correlation. In a even weaker way we can see it for Information Tecnology, Consumer Goods and Services (still for Spearman. This means that not all of the firms from this area follow the same flow. Instead we don't see this for Health Care and Staples. So we can say that in these GICS the firms don't have the same trend in change of price. The fact that Pearson and Spearmen almost give the same result, makes us think that these associations measures have the same conclusion, but maybe Spearman captures them a little bit more.
+
+###Asymptotic
+
+For curiosity we decided to see if we got the same result in the asymptotic way. Through which we found the Lower and Upper bounds both for Pearson and for Spearman, with: $C_{n,\alpha}=[L,U]=[h^{-1}(Z_{j,k}-z_{\alpha/2m}/\sqrt{n-3}),h^{-1}(Z_{j,k}+z_{\alpha/2m}/\sqrt{n-3})]$ , where $m = \binom{D}{2}$.
+
+Then we fill the empty matrices Edges_P and Edges_K by checking if the intesection between [-eps,eps] and the confidence interval is NULL. If it is empty we create the edge, adjurning the Adjacency Matrix. Here alpha is still 0.0001.
+
+Assuming a bivariate normal population with population rank correlation $\rho$, the transformation of the sample Spearman's rank correlation from r to $z_r$. $z_r=0.5*ln(\frac{1+r}{1-r})$ is approximatly normaly distribuited with variance $\frac{1}{n-3}$. 
+
+```{r}
+alpha = 0.00001
+m = 4950 
+#Pearson
+eps = 0.1
+L_P <- tanh(Z_Hat_P - qnorm(1-(alpha/(2*m)))/sqrt(length(STOCK)-3))
+U_P <- tanh(Z_Hat_P + qnorm(1-(alpha/(2*m)))/sqrt(length(STOCK)-3))
+Edges_P <- matrix(NA, nrow = length(STOCK), ncol = length(STOCK))
+for (i in 1:length(STOCK)){
+  for (j in 1:length(STOCK)){
+    if ( (L_P[i,j]>eps) | (U_P[i,j]<(-eps))){
+      Edges_P[i,j] <- 1
+    }
+    else{
+       Edges_P[i,j] <- 0
+    }
+  }
+}
+
+#Spearman
+L_K <- tanh(Z_Hat_K - qnorm(1-(alpha/2))/sqrt(length(STOCK)-3))
+U_K <- tanh(Z_Hat_K + qnorm(1-(alpha/2))/sqrt(length(STOCK)-3))
+
+eps = 0.1
+Edges_K <- matrix(NA, nrow = length(STOCK), ncol = length(STOCK))
+for (i in 1:length(STOCK)){
+  for (j in 1:length(STOCK)){
+    if ( (L_K[i,j]>eps) | (U_K[i,j]<(-eps))){
+      Edges_K[i,j] <- 1
+    }
+    else{
+       Edges_K[i,j] <- 0
+    }
+  }
+}
+```
+
+Having the Adjacency Matrices, we can plot the graphs. The nodes reppresent the stocks. We assigned for every GICS a different color so we can study it better.
+```{r}
+#Pearson
+net_P=graph.adjacency(Edges_P,mode="undirected",weighted=NULL,diag=FALSE)
+colors <- c("green","red","orchid","blue","yellow","orange","black","grey","brown","purple")
+for ( i in 10:1){
+V(net_P)[ V(net_P) <= i*10 ]$color <- colors[i]
+}
+plot.igraph(net_P,vertex.label=NA,layout=layout.fruchterman.reingold,
+            vertex.size=5, main= "Marginal Correlation Graph - Pearson - Asymptotic")
+legend(x = "topleft", GICS ,col = colors, bty="n", cex=0.7, lty=1)
+```
+
+```{r}
+#Spearman
+net_K=graph.adjacency(Edges_K,mode="undirected",weighted=NULL,diag=FALSE)
+colors <- c("green","red","orchid","blue","yellow","orange","black","grey","brown","purple")
+for ( i in 10:1){
+V(net_K)[ V(net_K) <= i*10 ]$color <- colors[i]
+}
+plot.igraph(net_K,vertex.label=NA,layout=layout.fruchterman.reingold,
+            vertex.size=5, main= "Marginal Correlation Graph - Spearman - Asymptotic")
+legend(x = "topleft", GICS ,col = colors, bty="n", cex=0.7, lty=1)
+```
+
+###Analysis
+
+We can see that both association measures create a few clusters and some isolated nodes. Basic Materials, Utilities, Energy and Finance clusters are created in both methods. So we can conclude that most of the firms that are in these areas follow the same trend. We can see in particular that Basic Materials and Energy are really similar to each other. In a weaker way, we can see even the cluster for Industrial Goods. So we can say that the asymptotic tecnique collects less information (in a good or a bad way).
